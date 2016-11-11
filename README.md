@@ -1,0 +1,3 @@
+# core-data-api
+
+NB: WORK IN PROGRESS - NOT FINISHED YET!
