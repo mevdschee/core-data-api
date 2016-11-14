@@ -1,9 +1,8 @@
 ﻿using System.Text;
 using System.IO;
-using System.Runtime.Serialization.Json;
 using System.Collections.Generic;
 using MySql.Data.MySqlClient;
-//using System.Data.SqlClient;
+using Newtonsoft.Json;
 using System.Text.RegularExpressions;
 using System.Linq;
 using System.Threading.Tasks;
@@ -39,15 +38,9 @@ namespace ConsoleApplication
             string method = context.Request.Method;
             string[] request = context.Request.Path.ToString().Trim('/').Split('/');
             
-            /*BinaryReader reader = new BinaryReader(context.Request.Body);
-            int length = (int)context.Request.ContentLength;
-            string data = Encoding.UTF8.GetString (reader.ReadBytes(length));*/
-
-            DataContractJsonSerializer json = new DataContractJsonSerializer(typeof(Dictionary<string,object>));
-            Dictionary<string,object> input = null;
-            try {
-			    input = json.ReadObject(context.Request.Body) as Dictionary<string,object>; 
-            } catch (System.Exception) {}
+            int length = ((int?)context.Request.ContentLength) ?? default(int);
+            string data = Encoding.UTF8.GetString ((new BinaryReader(context.Request.Body)).ReadBytes(length));
+            Dictionary<string,object> input = JsonConvert.DeserializeObject<Dictionary<string, object>>(data);
 
 			// connect to the sql server database
 			MySqlConnection link = new MySqlConnection("addr=localhost;uid=php-crud-api;pwd=php-crud-api;database=php-crud-api;SslMode=None");
@@ -93,16 +86,16 @@ namespace ConsoleApplication
 					else context.Response.WriteAsync(",");
 					Dictionary<string, object> row = new Dictionary<string, object> ();
 					foreach (var field in fields) row.Add (field, reader [field]);
-					json.WriteObject(context.Response.Body,(object)row);
+					context.Response.WriteAsync(JsonConvert.SerializeObject((object)row));
 				}
 				if (key == 0) context.Response.WriteAsync("]");
 			} else if (method == "POST") {
 				MySqlDataReader reader = command.ExecuteReader ();
 				reader.NextResult ();
 				reader.Read ();
-                json.WriteObject(context.Response.Body,(object)reader.GetValue (0));
+				context.Response.WriteAsync(JsonConvert.SerializeObject((object)reader.GetValue (0)));
 			} else {
-				json.WriteObject(context.Response.Body,(object) command.ExecuteNonQuery ());
+				context.Response.WriteAsync(JsonConvert.SerializeObject((object) command.ExecuteNonQuery ()));
 			}
 
 			// close mysql connection
