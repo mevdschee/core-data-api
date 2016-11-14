@@ -1,4 +1,12 @@
-﻿using System.Threading.Tasks;
+﻿using System.Text;
+using System.IO;
+using System.Runtime.Serialization.Json;
+using System.Collections.Generic;
+using MySql.Data.MySqlClient;
+//using System.Data.SqlClient;
+using System.Text.RegularExpressions;
+using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -26,8 +34,81 @@ namespace ConsoleApplication
         }
 
         public Task handler(HttpContext context) {
-           //Console.WriteLine("Received request");
-           return context.Response.WriteAsync("Hello world");
+
+            // get the HTTP method, path and body of the request
+            string method = context.Request.Method;
+            string[] request = context.Request.Path.ToString().Trim('/').Split('/');
+            
+            /*BinaryReader reader = new BinaryReader(context.Request.Body);
+            int length = (int)context.Request.ContentLength;
+            string data = Encoding.UTF8.GetString (reader.ReadBytes(length));*/
+
+            DataContractJsonSerializer json = new DataContractJsonSerializer(typeof(Dictionary<string,object>));
+            Dictionary<string,object> input = null;
+            try {
+			    input = json.ReadObject(context.Request.Body) as Dictionary<string,object>; 
+            } catch (System.Exception) {}
+
+			// connect to the sql server database
+			MySqlConnection link = new MySqlConnection("addr=localhost;uid=php-crud-api;pwd=php-crud-api;database=php-crud-api;SslMode=None");
+			link.Open();
+
+			// retrieve the table and key from the path
+			string table = Regex.Replace(request[0], "[^a-z0-9_]+", "");
+			int key = request.Length>1 ? int.Parse(request[1]) : 0;
+
+			// escape the columns from the input object
+			string[] columns = input!=null ? input.Keys.Select(i => Regex.Replace(i.ToString(), "[^a-z0-9_]+", "")).ToArray() : null;
+
+			// build the SET part of the SQL command
+			string set = input != null ? string.Join (", ", columns.Select (i => "`" + i + "`=@_" + i).ToArray ()) : "";
+
+			// create SQL based on HTTP method
+			string sql = null;
+			switch (method) {
+			case "GET":
+				sql = string.Format ("select * from `{0}`" + (key > 0 ? " where `id`=@pk" : ""), table); break;
+			case "PUT":
+				sql = string.Format ("update `{0}` set {1} where `id`=@pk",table,set); break;
+			case "POST":
+				sql = string.Format ("insert into `{0}` set {1}; select scope_identity()",table,set); break;
+			case "DELETE":
+				sql = string.Format ("delete `{0}` where `id`=@pk",table); break;
+			}
+
+			// add parameters to command
+			MySqlCommand command = new MySqlCommand(sql, link);
+			if (input!=null) foreach (string c in columns) command.Parameters.AddWithValue ("@_"+c, input[c]);
+			if (key>0) command.Parameters.AddWithValue ("@pk", key);
+
+			// print results, insert id or affected row count
+			if (method == "GET") {
+				MySqlDataReader reader = command.ExecuteReader ();
+				var fields = new List<string> ();
+				for (int i = 0; i < reader.FieldCount; i++) fields.Add (reader.GetName(i));
+				if (key == 0) context.Response.WriteAsync("[");
+				bool first = true;
+				while (reader.Read ()) {
+					if (first) first = false;
+					else context.Response.WriteAsync(",");
+					Dictionary<string, object> row = new Dictionary<string, object> ();
+					foreach (var field in fields) row.Add (field, reader [field]);
+					json.WriteObject(context.Response.Body,(object)row);
+				}
+				if (key == 0) context.Response.WriteAsync("]");
+			} else if (method == "POST") {
+				MySqlDataReader reader = command.ExecuteReader ();
+				reader.NextResult ();
+				reader.Read ();
+                json.WriteObject(context.Response.Body,(object)reader.GetValue (0));
+			} else {
+				json.WriteObject(context.Response.Body,(object) command.ExecuteNonQuery ());
+			}
+
+			// close mysql connection
+            link.Close ();
+
+            return context.Response.Body.FlushAsync();
         }
     }
 }
